@@ -2009,5 +2009,101 @@ fn merge_directive(
     }
 }
 
+fn merge_repeatable_directives(
+    existing: Vec<DirectiveDefinition>,
+    new_defs: Vec<DirectiveDefinition>,
+) -> Vec<DirectiveDefinition> {
+    use std::collections::HashMap;
+    let mut result = Vec::new();
+    let mut name_to_index: HashMap<Name, usize> = HashMap::new();
+
+    // Process existing directives
+    for (i, def) in existing.into_iter().enumerate() {
+        if !def.repeatable {
+            // For non-repeatable, store last index by name
+            name_to_index.insert(def.name.clone(), i);
+        }
+        result.push(def);
+    }
+
+    // Process new directives
+    for new_def in new_defs {
+        if new_def.repeatable {
+            // For repeatable, always add
+            result.push(new_def);
+        } else {
+            // For non-repeatable, replace existing or add new
+            if let Some(&index) = name_to_index.get(&new_def.name) {
+                result[index] = new_def;
+            } else {
+                result.push(new_def);
+            }
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod test_merge_directives {
+    use super::*;
+    use apollo_compiler::Name;
+    use apollo_compiler::schema::DirectiveDefinition;
+    use apollo_compiler::schema::DirectiveLocation;
+
+    #[test]
+    fn test_merge_repeatable_directives() {
+        // Create non-repeatable directive
+        let deprecated_v1 = DirectiveDefinition {
+            name: Name::new_static_unchecked("deprecated"),
+            description: None,
+            locations: vec![DirectiveLocation::FieldDefinition],
+            repeatable: false,
+            arguments: vec![],
+        };
+
+        let deprecated_v2 = DirectiveDefinition {
+            name: Name::new_static_unchecked("deprecated"),
+            description: Some("New version".into()),
+            locations: vec![DirectiveLocation::FieldDefinition],
+            repeatable: false,
+            arguments: vec![],
+        };
+
+        // Create repeatable directive
+        let tag_v1 = DirectiveDefinition {
+            name: Name::new_static_unchecked("tag"),
+            description: None,
+            locations: vec![DirectiveLocation::FieldDefinition],
+            repeatable: true,
+            arguments: vec![],
+        };
+
+        let tag_v2 = DirectiveDefinition {
+            name: Name::new_static_unchecked("tag"),
+            description: Some("New version".into()),
+            locations: vec![DirectiveLocation::FieldDefinition],
+            repeatable: true,
+            arguments: vec![],
+        };
+
+        let existing = vec![deprecated_v1.clone(), tag_v1.clone()];
+        let new_defs = vec![deprecated_v2.clone(), tag_v2.clone()];
+
+        let merged = merge_repeatable_directives(existing, new_defs);
+
+        // Verify non-repeatable was replaced
+        assert_eq!(
+            merged.iter().find(|d| d.name == "deprecated"),
+            Some(&deprecated_v2)
+        );
+
+        // Verify both repeatable versions are present
+        let tags: Vec<_> = merged.iter().filter(|d| d.name == "tag").collect();
+        assert_eq!(tags.len(), 2);
+        assert!(tags.contains(&&tag_v1));
+        assert!(tags.contains(&&tag_v2));
+    }
+}
 #[cfg(test)]
 mod tests;
