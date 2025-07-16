@@ -1,6 +1,7 @@
 mod fields;
 
 use std::fmt::Debug;
+use std::fmt::Display;
 use std::fmt::Formatter;
 use std::iter;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use apollo_compiler::collections::IndexMap;
 use apollo_compiler::collections::IndexSet;
 use apollo_compiler::name;
 use apollo_compiler::schema::Component;
+use apollo_compiler::schema::ComponentName;
 use apollo_compiler::schema::EnumType;
 use apollo_compiler::schema::ExtendedType;
 use apollo_compiler::schema::Implementers;
@@ -325,17 +327,19 @@ impl Merger {
         Ok(())
     }
 
-    fn merge_descriptions<T: Eq + Clone>(&mut self, merged: &mut Option<T>, new: &Option<T>) {
+    fn merge_descriptions<T: Eq + Clone + Debug>(
+        &mut self,
+        merged: &mut Option<T>,
+        new: &Option<T>,
+    ) {
         match (&mut *merged, new) {
-            (_, None) => {}
-            (None, Some(_)) => merged.clone_from(new),
-            (Some(a), Some(b)) => {
-                if a != b {
-                    // TODO add info about type and from/to subgraph
-                    self.composition_hints
-                        .push(String::from("conflicting descriptions"));
-                }
+            (_, &None) => {}
+            (merged @ None, &Some(ref value)) => *merged = Some(value.clone()),
+            (Some(a), &Some(ref b)) if a != b => {
+                self.composition_hints
+                    .push(format!("conflicting descriptions for {:#?} != {:#?}", a, b));
             }
+            _ => {}
         }
     }
 
@@ -344,19 +348,34 @@ impl Merger {
         let subgraph_def = &subgraph.schema.schema().schema_definition;
         self.merge_descriptions(&mut supergraph_def.description, &subgraph_def.description);
 
-        if subgraph_def.query.is_some() {
-            supergraph_def.query.clone_from(&subgraph_def.query);
-            // TODO mismatch on query types
-        }
-        if subgraph_def.mutation.is_some() {
-            supergraph_def.mutation.clone_from(&subgraph_def.mutation);
-            // TODO mismatch on mutation types
-        }
-        if subgraph_def.subscription.is_some() {
-            supergraph_def
-                .subscription
-                .clone_from(&subgraph_def.subscription);
-            // TODO mismatch on subscription types
+        self.merge_schema_definition(&mut supergraph_def.query, &subgraph_def.query, "query");
+        self.merge_schema_definition(
+            &mut supergraph_def.mutation,
+            &subgraph_def.mutation,
+            "mutation",
+        );
+        self.merge_schema_definition(
+            &mut supergraph_def.subscription,
+            &subgraph_def.subscription,
+            "subscription",
+        );
+    }
+
+    fn merge_schema_definition(
+        &mut self,
+        supergraph_type: &mut Option<ComponentName>,
+        subgraph_type: &Option<ComponentName>,
+        operation_type: &str,
+    ) {
+        match (supergraph_type, subgraph_type) {
+            (supergraph @ &mut None, Some(subgraph)) => *supergraph = Some(subgraph.clone()),
+            (Some(supergraph), Some(subgraph)) if supergraph != subgraph => {
+                self.composition_hints.push(format!(
+                    "conflicting {} for {:#?} != {:#?}",
+                    operation_type, supergraph, subgraph
+                ));
+            }
+            _ => {}
         }
     }
 
